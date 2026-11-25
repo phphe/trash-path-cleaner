@@ -11,20 +11,23 @@
     兼容：PowerShell 2.0 及以上（Win7 自带 2.0、Win10/11 自带 5.1）。
           $I 元数据支持 Win7/Vista 的 V1（544 字节）与 Win10 1809+ 的 V2 两种格式。
 
-    用法：双击 run-trash-path-cleaner.bat；或在 PowerShell 中：
+    用法：双击 run.bat；或在 PowerShell 中：
           .\trash-path-cleaner.ps1
           .\trash-path-cleaner.ps1 -TargetPath 'D:\proj' -MaxSizeKB 100
           .\trash-path-cleaner.ps1 -TargetPath 'D:\proj;E:\tmp'      # 多个目录用分号分隔
           .\trash-path-cleaner.ps1 -AllUsers        # 自动提权，检查所有用户的回收站
           .\trash-path-cleaner.ps1 -Lang en         # 强制英文界面（默认跟随系统 UI 语言）
 
+    配置：目标目录与大小阈值放在脚本同目录的 config.env（key=value 纯文本），
+          不存在时首次运行会自动生成一份带注释的模板；命令行参数优先于配置文件。
+
     界面语言：默认按系统 UI 语言自动选择中文（zh）或英文（en），非中文系统一律用英文。
 #>
 [CmdletBinding()]
 param(
-    # 目标目录（可多个）。不传则使用下面的 $ConfigTargets
+    # 目标目录（可多个）。不传则读取 config.env 中的 TARGETS
     [string[]]$TargetPath,
-    # 大小阈值（KB，严格小于才删除）。不传则使用下面的 $ConfigMaxSizeKB
+    # 大小阈值（KB，严格小于才删除）。不传则读取 config.env 中的 MAX_SIZE_KB
     [int]$MaxSizeKB = 0,
     # 界面语言：zh / en。不传则按系统 UI 语言自动选择
     [string]$Lang,
@@ -36,15 +39,10 @@ param(
     [switch]$NoPause
 )
 
-# ======================= 用户设置 =======================
-# 需要清理的原始目录，可写多个。回收站条目只要原始路径 == 该目录 或 位于其子目录下，就算命中。
-$ConfigTargets = @(
-    'C:\Users\phphe\Documents\workspace',
-    'C:\Users\phphe\AppData'
-)
-
-# 大小上限（KB）：原始大小严格小于该值的文件才会被删除
-$ConfigMaxSizeKB = 30
+# ======================= 配置文件 =======================
+# 配置放在脚本同目录的 config.env（key=value，纯文本，不需要 JSON）；
+# 找不到时会自动生成一份带注释的模板。命令行参数优先于配置文件。
+$ConfigFileName = 'config.env'
 # =======================================================
 
 $ErrorActionPreference = 'Stop'
@@ -89,7 +87,12 @@ if ($LangCode -eq 'zh') {
         Targets        = '目标目录：'
         TargetMissing  = '  (目录当前不存在，按路径前缀匹配)'
         SizeCondition  = '大小条件：原始大小 < {0} KB'
-        NoTargets      = '错误：没有配置任何有效的目标目录，请编辑脚本顶部的 $ConfigTargets。'
+        NoTargets      = '错误：没有可用的目标目录，请编辑 {0} 中的 TARGETS。'
+        ConfigLine     = '配置文件：{0}'
+        ConfigCreated  = '未找到配置文件，已生成模板：{0}'
+        ConfigNeedEdit = '请编辑该文件中的 TARGETS（把示例路径换成要清理的目录），然后重新运行。'
+        ConfigWriteFail = '无法创建配置文件模板：{0}（{1}）'
+        ConfigUsingCli = '未找到配置文件，本次改用命令行参数。'
         RequestingAdmin = '正在请求管理员权限，以检查所有用户的回收站……'
         ElevatedStarted = '已在新窗口中以管理员身份运行，本窗口可关闭。'
         ElevateFailed  = '提权失败（可能取消了 UAC），继续以当前权限运行。'
@@ -132,7 +135,12 @@ if ($LangCode -eq 'zh') {
         Targets        = 'Target folders:'
         TargetMissing  = '  (missing now; still matched by path prefix)'
         SizeCondition  = 'Size rule: original size < {0} KB'
-        NoTargets      = 'Error: no valid target folder. Edit $ConfigTargets at the top of the script.'
+        NoTargets      = 'Error: no target folder available. Edit TARGETS in {0}.'
+        ConfigLine     = 'Config file: {0}'
+        ConfigCreated  = 'Config file not found; template created: {0}'
+        ConfigNeedEdit = 'Edit TARGETS in that file (replace the sample path), then run again.'
+        ConfigWriteFail = 'Failed to create config template: {0} ({1})'
+        ConfigUsingCli = 'Config file not found; using command-line arguments for this run.'
         RequestingAdmin = 'Requesting administrator rights to check every user''s recycle bin...'
         ElevatedStarted = 'Started in a new elevated window. You can close this one.'
         ElevateFailed  = 'Elevation failed (UAC may have been cancelled); continuing with current rights.'
@@ -177,6 +185,72 @@ if ($LangCode -eq 'zh') {
 function Test-Blank {
     param([string]$Text)
     return ($null -eq $Text -or $Text.Trim().Length -eq 0)
+}
+
+# 读取 config.env（key=value 纯文本，# 或 ; 开头为注释）。
+# 不依赖 ConvertFrom-Json，PowerShell 2.0 可直接使用。
+function Read-ConfigFile {
+    param([string]$Path)
+    $cfg = New-Object PSObject -Property @{
+        Found     = $false
+        Targets   = @()
+        MaxSizeKB = 0
+    }
+    if (-not (Test-Path -LiteralPath $Path)) { return $cfg }
+    $cfg.Found = $true
+
+    $lines = @()
+    try { $lines = [IO.File]::ReadAllLines($Path, [Text.Encoding]::UTF8) } catch { return $cfg }
+
+    $list = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($line in $lines) {
+        $t = $line.Trim()
+        if ($t.Length -eq 0) { continue }
+        if ($t.StartsWith('#') -or $t.StartsWith(';')) { continue }
+        $eq = $t.IndexOf('=')
+        if ($eq -le 0) { continue }
+
+        $key = $t.Substring(0, $eq).Trim().ToUpperInvariant()
+        $val = $t.Substring($eq + 1).Trim()
+        # 允许整体用引号包起来
+        if ($val.Length -ge 2 -and
+            (($val.StartsWith('"') -and $val.EndsWith('"')) -or ($val.StartsWith("'") -and $val.EndsWith("'")))) {
+            $val = $val.Substring(1, $val.Length - 2).Trim()
+        }
+
+        if ($key -eq 'TARGETS') {
+            foreach ($part in ($val -split ';')) {
+                $p = $part.Trim()
+                if ($p.Length -gt 0) { [void]$list.Add($p) }
+            }
+        } elseif ($key -eq 'MAX_SIZE_KB') {
+            $n = 0
+            if ([int]::TryParse($val, [ref]$n) -and $n -gt 0) { $cfg.MaxSizeKB = $n }
+        }
+    }
+    $cfg.Targets = @($list)
+    return $cfg
+}
+
+# 生成带注释的配置模板（UTF-8 带 BOM + CRLF，Win7 记事本打开不乱码）
+function Write-ConfigTemplate {
+    param([string]$Path)
+    $text = @'
+# 回收站定点清理 配置文件 / trash-path-cleaner config
+# 语法：每行一个 key=value，# 或 ; 开头为注释；路径含空格时无需加引号。
+# 修改后保存并重新运行即可。
+
+# 目标目录：可写多个，用分号 ; 分隔。
+# 回收站条目只要原始路径等于该目录或位于其子目录下，就算命中。
+# 支持环境变量（如 %USERPROFILE%\Downloads）和相对路径（相对脚本所在目录）。
+TARGETS=C:\Users\username\test_directory
+
+# 大小阈值（KB）：原始大小严格小于该值的文件才会被删除。
+MAX_SIZE_KB=30
+'@
+    # 统一用 CRLF，兼容旧版记事本
+    $text = ($text -replace "`r`n", "`n") -replace "`n", "`r`n"
+    [IO.File]::WriteAllText($Path, $text, (New-Object Text.UTF8Encoding($true)))
 }
 
 function Test-IsAdmin {
@@ -435,18 +509,40 @@ function Invoke-Main {
     $scriptDir = $ScriptDir
     if (-not $scriptDir) { $scriptDir = (Get-Location).Path }
 
-    # 目标目录来源：命令行参数 > 配置块。参数支持数组，或用分号分隔多个目录
+    # 目标目录来源：命令行参数 > config.env。参数支持数组，或用分号分隔多个目录
     $rawTargets = @()
     if ($TargetPath -and $TargetPath.Count -gt 0) {
         foreach ($item in $TargetPath) {
             if (Test-Blank $item) { continue }
-            foreach ($part in ($item -split ';')) { $rawTargets += $part }
+            foreach ($part in ($item -split ';')) {
+                if (-not (Test-Blank $part)) { $rawTargets += $part }
+            }
         }
-    } else {
-        $rawTargets = $ConfigTargets
     }
-    $limitKB = if ($MaxSizeKB -gt 0) { $MaxSizeKB } else { $ConfigMaxSizeKB }
-    if ($limitKB -le 0) { $limitKB = 30 }
+
+    # 读取外部配置；文件缺失时自动生成模板并提示
+    $configPath = Join-Path $scriptDir $ConfigFileName
+    $cfg = Read-ConfigFile -Path $configPath
+    if (-not $cfg.Found) {
+        try {
+            Write-ConfigTemplate -Path $configPath
+            Write-Host ($UI.ConfigCreated -f $configPath) -ForegroundColor Yellow
+        } catch {
+            Write-Host ($UI.ConfigWriteFail -f $configPath, $_.Exception.Message) -ForegroundColor Red
+        }
+        if ($rawTargets.Count -eq 0) {
+            Write-Host $UI.ConfigNeedEdit -ForegroundColor Yellow
+            return 0
+        }
+        Write-Host $UI.ConfigUsingCli -ForegroundColor DarkYellow
+    }
+
+    if ($rawTargets.Count -eq 0) { $rawTargets = $cfg.Targets }
+
+    $limitKB = 0
+    if ($MaxSizeKB -gt 0) { $limitKB = $MaxSizeKB }
+    elseif ($cfg.MaxSizeKB -gt 0) { $limitKB = $cfg.MaxSizeKB }
+    else { $limitKB = 30 }
     $limitBytes = [int64]$limitKB * 1024
 
     # 规范化 + 去重 + 按长度倒序（嵌套目录时命中更具体的那个）
@@ -460,7 +556,7 @@ function Invoke-Main {
         [void]$targets.Add((New-Object PSObject -Property @{ Path = $norm }))
     }
     if ($targets.Count -eq 0) {
-        Write-Host $UI.NoTargets -ForegroundColor Red
+        Write-Host ($UI.NoTargets -f $configPath) -ForegroundColor Red
         return 1
     }
     $targets = @($targets | Sort-Object { $_.Path.Length } -Descending)
@@ -469,6 +565,7 @@ function Invoke-Main {
     Write-Host '============================================' -ForegroundColor Cyan
     Write-Host $UI.Title -ForegroundColor Cyan
     Write-Host '============================================' -ForegroundColor Cyan
+    if ($cfg.Found) { Write-Host ($UI.ConfigLine -f $configPath) }
     Write-Host $UI.Targets
     foreach ($t in $targets) {
         $mark = if ([IO.Directory]::Exists($t.Path)) { '' } else { $UI.TargetMissing }
