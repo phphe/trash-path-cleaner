@@ -22,7 +22,7 @@ It reads the raw `$I` metadata and `$R` payload of the recycle bin instead of en
 - **Fast**: a single directory pass reads every `$I`, parsing only the header and path — no COM calls per item.
 - **Bilingual UI**: follows the system UI language automatically; override with `-Lang zh|en`.
 - **Legacy friendly**: works from PowerShell 2.0; supports the Win7 `$I` V1 (544-byte) and Win10 1809+ V2 formats.
-- **External config**: target folders and threshold live in `config.env`, so the script never needs editing; a commented template is generated automatically when the file is missing.
+- **External config**: target folders and threshold live in `config.env`, so the script never needs editing. The file is not shipped with the repository (it is listed in `.gitignore`); when it is missing the script exits with the required keys and a sample.
 - **Safety guard**: only `$I` / `$R` items inside `$Recycle.Bin\<SID>\` can be deleted; files at their original locations are never touched.
 
 ## Requirements
@@ -42,14 +42,14 @@ The configuration file is plain `key=value` text, not JSON, so it does not depen
 
 1. Download or clone this repository.
 2. Keep `trash-path-cleaner.ps1` and `run.bat` in the same folder (the launcher looks for the script by a fixed name).
-3. Double-click `run.bat`. On the first run, if `config.env` is missing, a commented template is created automatically.
+3. Create `config.env` next to the script using the sample in section 2 (the repository does not include it and Git ignores it), then double-click `run.bat`.
 4. If Windows marked files downloaded from the internet, unblock them in file properties, or right-click `run.bat` and choose "Run as administrator".
 
 ```
 trash-path-cleaner/
 ├─ trash-path-cleaner.ps1   # main script
 ├─ run.bat                  # double-click launcher
-├─ config.env               # settings (target folders / size threshold)
+├─ config.env               # create it yourself (ignored by Git)
 ├─ README.md                # English documentation (this file)
 ├─ README.zh-CN.md          # Chinese documentation
 ├─ LICENSE
@@ -62,9 +62,9 @@ trash-path-cleaner/
 
 Double-click `run.bat`. The script runs in the current console window and waits for Enter before closing.
 
-### 2. Edit config.env
+### 2. Create / edit config.env
 
-`config.env` next to the script:
+Create a plain text file named `config.env` next to the script (not included in the repository, ignored by Git):
 
 ```ini
 # Target folders, separate multiple paths with ';'
@@ -77,8 +77,8 @@ MAX_SIZE_KB=30
 - `TARGETS`: replace with the folders you want to clean; separate several with `;`. Environment variables such as `%USERPROFILE%\Downloads` and relative paths (relative to the script folder) are supported. The folder does not need to exist — historical recycle-bin entries are still matched by path prefix.
 - `MAX_SIZE_KB`: positive integer, in KB.
 - Lines starting with `#` or `;` are comments; quotes are not required even when a path contains spaces.
-- Delete `config.env` and run again to regenerate the sample template.
-- If you put your real paths into `config.env`, keep that in mind before committing it to a public repository.
+- If `config.env` is missing at startup, the script prints the required keys and a sample, then exits — it never creates the file for you.
+- `config.env` is listed in `.gitignore`, so a fresh clone starts without it; copy the sample above into your own file.
 
 ### 3. Command-line parameters (override the config file)
 

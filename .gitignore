@@ -5,6 +5,9 @@ Desktop.ini
 $RECYCLE.BIN/
 *.lnk
 
+# 本地配置（按 README 示例自行创建，不入库）
+config.env
+
 # 临时 / 日志 / 备份
 *.tmp
 *.temp

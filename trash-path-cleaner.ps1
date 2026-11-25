@@ -19,7 +19,7 @@
           .\trash-path-cleaner.ps1 -Lang en         # 强制英文界面（默认跟随系统 UI 语言）
 
     配置：目标目录与大小阈值放在脚本同目录的 config.env（key=value 纯文本），
-          不存在时首次运行会自动生成一份带注释的模板；命令行参数优先于配置文件。
+          需按 README 中的示例自行创建；缺失时会报错并打印必需键。命令行参数优先于配置文件。
 
     界面语言：默认按系统 UI 语言自动选择中文（zh）或英文（en），非中文系统一律用英文。
 #>
@@ -87,12 +87,13 @@ if ($LangCode -eq 'zh') {
         Targets        = '目标目录：'
         TargetMissing  = '  (目录当前不存在，按路径前缀匹配)'
         SizeCondition  = '大小条件：原始大小 < {0} KB'
-        NoTargets      = '错误：没有可用的目标目录，请编辑 {0} 中的 TARGETS。'
+        NoTargets      = '错误：没有可用的目标目录，请检查 {0} 中的 TARGETS。'
         ConfigLine     = '配置文件：{0}'
-        ConfigCreated  = '未找到配置文件，已生成模板：{0}'
-        ConfigNeedEdit = '请编辑该文件中的 TARGETS（把示例路径换成要清理的目录），然后重新运行。'
-        ConfigWriteFail = '无法创建配置文件模板：{0}（{1}）'
-        ConfigUsingCli = '未找到配置文件，本次改用命令行参数。'
+        ConfigMissing  = '错误：找不到配置文件：{0}'
+        ConfigCreate   = '请在上述路径新建 config.env，写入下面两行（把示例路径换成要清理的目录）：'
+        ConfigKeys     = '必需键：TARGETS（目标目录，多个用分号 ; 分隔）、MAX_SIZE_KB（大小阈值，单位 KB）'
+        ConfigSample1  = 'TARGETS=C:\Users\username\test_directory'
+        ConfigSample2  = 'MAX_SIZE_KB=30'
         RequestingAdmin = '正在请求管理员权限，以检查所有用户的回收站……'
         ElevatedStarted = '已在新窗口中以管理员身份运行，本窗口可关闭。'
         ElevateFailed  = '提权失败（可能取消了 UAC），继续以当前权限运行。'
@@ -135,12 +136,13 @@ if ($LangCode -eq 'zh') {
         Targets        = 'Target folders:'
         TargetMissing  = '  (missing now; still matched by path prefix)'
         SizeCondition  = 'Size rule: original size < {0} KB'
-        NoTargets      = 'Error: no target folder available. Edit TARGETS in {0}.'
+        NoTargets      = 'Error: no target folder. Check TARGETS in {0}.'
         ConfigLine     = 'Config file: {0}'
-        ConfigCreated  = 'Config file not found; template created: {0}'
-        ConfigNeedEdit = 'Edit TARGETS in that file (replace the sample path), then run again.'
-        ConfigWriteFail = 'Failed to create config template: {0} ({1})'
-        ConfigUsingCli = 'Config file not found; using command-line arguments for this run.'
+        ConfigMissing  = 'Error: config file not found: {0}'
+        ConfigCreate   = 'Create config.env at that path with these two lines (replace the sample path):'
+        ConfigKeys     = 'Required keys: TARGETS (folders separated by ";"), MAX_SIZE_KB (threshold in KB)'
+        ConfigSample1  = 'TARGETS=C:\Users\username\test_directory'
+        ConfigSample2  = 'MAX_SIZE_KB=30'
         RequestingAdmin = 'Requesting administrator rights to check every user''s recycle bin...'
         ElevatedStarted = 'Started in a new elevated window. You can close this one.'
         ElevateFailed  = 'Elevation failed (UAC may have been cancelled); continuing with current rights.'
@@ -230,27 +232,6 @@ function Read-ConfigFile {
     }
     $cfg.Targets = @($list)
     return $cfg
-}
-
-# 生成带注释的配置模板（UTF-8 带 BOM + CRLF，Win7 记事本打开不乱码）
-function Write-ConfigTemplate {
-    param([string]$Path)
-    $text = @'
-# 回收站定点清理 配置文件 / trash-path-cleaner config
-# 语法：每行一个 key=value，# 或 ; 开头为注释；路径含空格时无需加引号。
-# 修改后保存并重新运行即可。
-
-# 目标目录：可写多个，用分号 ; 分隔。
-# 回收站条目只要原始路径等于该目录或位于其子目录下，就算命中。
-# 支持环境变量（如 %USERPROFILE%\Downloads）和相对路径（相对脚本所在目录）。
-TARGETS=C:\Users\username\test_directory
-
-# 大小阈值（KB）：原始大小严格小于该值的文件才会被删除。
-MAX_SIZE_KB=30
-'@
-    # 统一用 CRLF，兼容旧版记事本
-    $text = ($text -replace "`r`n", "`n") -replace "`n", "`r`n"
-    [IO.File]::WriteAllText($Path, $text, (New-Object Text.UTF8Encoding($true)))
 }
 
 function Test-IsAdmin {
@@ -520,21 +501,19 @@ function Invoke-Main {
         }
     }
 
-    # 读取外部配置；文件缺失时自动生成模板并提示
+    # 读取外部配置；文件缺失时直接报错退出，并打印必需键与示例
     $configPath = Join-Path $scriptDir $ConfigFileName
     $cfg = Read-ConfigFile -Path $configPath
     if (-not $cfg.Found) {
-        try {
-            Write-ConfigTemplate -Path $configPath
-            Write-Host ($UI.ConfigCreated -f $configPath) -ForegroundColor Yellow
-        } catch {
-            Write-Host ($UI.ConfigWriteFail -f $configPath, $_.Exception.Message) -ForegroundColor Red
-        }
-        if ($rawTargets.Count -eq 0) {
-            Write-Host $UI.ConfigNeedEdit -ForegroundColor Yellow
-            return 0
-        }
-        Write-Host $UI.ConfigUsingCli -ForegroundColor DarkYellow
+        Write-Host ''
+        Write-Host ($UI.ConfigMissing -f $configPath) -ForegroundColor Red
+        Write-Host $UI.ConfigCreate -ForegroundColor Yellow
+        Write-Host ''
+        Write-Host ('  ' + $UI.ConfigSample1) -ForegroundColor Gray
+        Write-Host ('  ' + $UI.ConfigSample2) -ForegroundColor Gray
+        Write-Host ''
+        Write-Host $UI.ConfigKeys -ForegroundColor DarkYellow
+        return 1
     }
 
     if ($rawTargets.Count -eq 0) { $rawTargets = $cfg.Targets }
