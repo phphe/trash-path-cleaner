@@ -1,0 +1,171 @@
+# 回收站定点清理 / trash-path-cleaner
+
+按「原始路径」精确清理 Windows 回收站：只删除指定目录（及其子目录）下、原始大小小于阈值的文件，其余一律不动。
+
+直接解析回收站底层的 `$I` 元数据与 `$R` 数据，不走 Shell COM 逐项枚举，几千条记录也能在一秒内扫完。
+
+- 中文名：回收站定点清理
+- 英文名：trash-path-cleaner
+- 许可证：MIT
+
+---
+
+## 功能特性
+
+- **按路径定点清理**：只命中配置的目标目录及其子目录，`C:\a` 不会误伤 `C:\ab`（前缀按路径分隔符做边界匹配）。
+- **按大小筛选**：原始大小严格小于阈值才删除，阈值可配置。
+- **多目录**：可配置多个目标目录，条目按最长匹配归属到更具体的目录，分别统计。
+- **区分文件与目录**：整目录被删除时，递归枚举 `$R` 目录内部的文件逐个判断大小，不把「整个文件夹的大小」当成一个文件。
+- **两种删除模式**：只删小文件（保留目录结构）/ 文件与目录条目一起删。
+- **速度快**：一次目录枚举读完 `$I`，只读 24~28 字节头部 + 路径，不做 COM 调用。
+- **中英双语界面**：跟随系统 UI 语言自动切换，也可 `-Lang zh|en` 强制指定。
+- **兼容旧系统**：PowerShell 2.0 起可用，兼容 Win7 的 `$I` V1（544 字节）与 Win10 1809+ 的 V2 格式。
+- **安全护栏**：只允许删除 `$Recycle.Bin\<SID>\` 内的 `$I` / `$R`，绝不触碰原始位置的文件。
+
+## 环境要求
+
+| 项目 | 要求 |
+| --- | --- |
+| 操作系统 | Windows 11 / Windows 10 / Windows 7（Vista 理论可用但未测试） |
+| PowerShell | 2.0 及以上（Win7 自带 2.0，Win10/11 自带 5.1） |
+| .NET Framework | 3.5 及以上（系统自带即可，无需额外安装） |
+| 权限 | 清理自己的回收站用普通权限；清理其他用户/系统账户需要管理员 |
+
+说明：`.NET 4.0+` 才有 `EnumerateFiles`，Win7 上的 PowerShell 2.0 会自动降级为 `GetFiles` 逐层路径列表，功能一致、速度略慢；遇到无权限的子目录会跳过而不是整棵树失败。
+
+## 安装 / 下载
+
+1. 下载或克隆本仓库。
+2. 确保 `trash-path-cleaner.ps1` 与 `run-trash-path-cleaner.bat` 在同一个文件夹（启动器按固定文件名查找脚本）。
+3. 无需安装，直接运行即可。若从网络下载后被系统标记，可在文件属性里勾选「解除锁定」，或对 bat 右键「以管理员身份运行」。
+
+```
+trash-path-cleaner/
+├─ trash-path-cleaner.ps1        # 主脚本
+├─ run-trash-path-cleaner.bat    # 双击启动器
+├─ README.md
+├─ LICENSE
+└─ .gitignore
+```
+
+## 使用方法
+
+### 1. 双击启动（推荐）
+
+双击 `run-trash-path-cleaner.bat`，脚本会在当前控制台窗口运行，结束后按回车关闭。
+
+### 2. 修改配置块
+
+用编辑器打开 `trash-path-cleaner.ps1`，改脚本顶部的两个变量：
+
+```powershell
+# 需要清理的原始目录，可写多个
+$ConfigTargets = @(
+    'C:\Users\phphe\Documents\workspace',
+    'C:\Users\phphe\AppData'
+)
+
+# 大小上限（KB）：原始大小严格小于该值的文件才会被删除
+$ConfigMaxSizeKB = 30
+```
+
+路径支持环境变量（如 `%USERPROFILE%\Downloads`）和相对路径（相对脚本所在目录）；目录当前不存在也没关系，仍会按路径前缀匹配回收站里的历史条目。
+
+### 3. 命令行参数
+
+| 参数 | 说明 |
+| --- | --- |
+| `-TargetPath <路径>` | 指定目标目录，多个用分号分隔，如 `'D:\proj;E:\tmp'`；优先于 `$ConfigTargets` |
+| `-MaxSizeKB <整数>` | 大小阈值（KB），优先于 `$ConfigMaxSizeKB` |
+| `-AllUsers` | 自动请求管理员权限，检查本机所有用户的回收站 |
+| `-Lang zh\|en` | 强制中文 / 英文界面；不传则跟随系统 UI 语言 |
+| `-NoPause` | 结束后不等待回车（方便自动化调用） |
+
+示例：
+
+```powershell
+.\trash-path-cleaner.ps1
+.\trash-path-cleaner.ps1 -TargetPath 'D:\proj' -MaxSizeKB 100
+.\trash-path-cleaner.ps1 -TargetPath 'D:\proj;E:\tmp'
+.\trash-path-cleaner.ps1 -AllUsers
+.\trash-path-cleaner.ps1 -Lang en
+```
+
+`-Lang` 也可以直接传给 bat：`run-trash-path-cleaner.bat -Lang en`。
+
+### 4. 统计结果怎么读
+
+脚本先扫描、后询问，扫描阶段不会删除任何内容。每个目标目录输出两行：
+
+```
+[1] C:\Users\phphe\Documents\workspace
+     文件：将删除 23 个，合计 2.1 KB；不删除 169 个，合计 1.07 GB（大小 ≥ 30 KB）
+     目录：0 个，合计 0 B（只有选 2 才会删除；选 1 时其中的小文件会被删除，目录本身保留）
+```
+
+- **文件**：`将删除` 是符合「路径命中 + 大小 < 阈值」的文件数（含整目录被删时递归统计到的内部小文件）；`不删除` 是路径命中但超阈值的文件。
+- **目录**：路径命中的「整目录被删除」条目数量与原始总大小。选 1 时保留目录、只删其中符合条件的小文件；选 2 才整体删除。
+
+### 5. 三个选项
+
+```
+请选择操作：
+  1  只删除文件：33 个，合计 125.8 KB（目录保留）
+  2  文件 + 目录一起删除：文件 33 个 / 125.8 KB，目录 3 个 / 0 B
+  3  取消（不做任何修改）
+```
+
+- **选项 1**：只删文件。散落文件删掉 `$R` + `$I`；目录条目内部只删递归统计出的小文件，目录本身保留（可能出现空文件夹）。
+- **选项 2**：文件 + 目录条目一起删。目录内的**所有**内容（包括大于阈值的文件）都会随文件夹永久删除。
+- **选项 3**：取消，不做任何修改。
+
+选择 1 或 2 之后还会再问一次 `y` 确认，输入其他内容即取消。
+
+## 权限说明
+
+- 回收站按 SID 分目录存放：`X:\$Recycle.Bin\<SID>\`。普通权限只能读自己 SID 的目录，其他用户与系统账户的目录会被跳过，并在输出里提示数量。
+- 需要一并处理时，加 `-AllUsers`（自动弹 UAC 提权）或右键 bat「以管理员身份运行」。
+- 提权后仍无法删除的条目，通常是正被程序占用，关闭相关程序后重试。
+
+## 性能数据
+
+本机实测（Windows 11 + PowerShell 5.1，4 个 SID 回收站）：
+
+| 阶段 | 数据量 | 耗时 |
+| --- | --- | --- |
+| 扫描 `$I` | 312 条元数据（6 条无法解析） | 0.39 ~ 0.43 秒 |
+| 递归统计目录条目内部文件 | 3 个目录条目 / 0 个文件 | 0.04 ~ 0.05 秒 |
+
+- 扫描是 O(条目数)，每条只 `ReadAllBytes` 头部并解析路径，不做 COM 调用。
+- 目录条目递归只做一次枚举：.NET 4.0+ 用 `EnumerateFiles`，仅当遇到无权限子目录才退化为逐层遍历。
+- Win7 + PowerShell 2.0 用 `GetFiles` 全量路径列表，条目多时比 `EnumerateFiles` 慢一些，但逻辑一致。
+
+## 已知限制
+
+- 只支持 `$Recycle.Bin` 结构（NTFS 及多数 NTFS 格式化的可移动磁盘）。FAT32/exFAT 的旧式 `RECYCLER` + `INFO2` 结构不解析，这些条目会被忽略。
+- 无法识别的 `$I` 文件（损坏、非 V1/V2 格式）会计入「无法解析」并跳过，不会删除。
+- 删除是永久性的，不进入回收站，也无法撤销。
+- 选项 1 删除目录内小文件后可能留下空文件夹；如需一并清理目录结构请用选项 2。
+- 大小比较是「严格小于」阈值，等于阈值的文件不删。
+- 只处理本地固定/可移动磁盘，网络驱动器不扫描。
+- `-AllUsers` 依赖 UAC 提权，UAC 被取消时回退为当前权限继续运行。
+
+---
+
+## English
+
+**trash-path-cleaner** — a small, fast Windows tool that permanently deletes recycle-bin items whose *original path* is under the folders you specify and whose *original size* is below a threshold.
+
+- Reads `$Recycle.Bin\<SID>\$I` metadata directly (V1 and V2 formats) instead of enumerating via Shell COM, so scanning thousands of entries takes well under a second.
+- Path matching respects boundaries (`C:\a` never matches `C:\ab`); multiple target folders are supported and attributed to the longest match.
+- Folder entries deleted as a whole are scanned recursively, so nested small files are counted and handled by file size rather than folder size.
+- Options: **1** delete matching files only (folders kept), **2** delete files and folder entries, **3** cancel. A second `y` confirmation is required.
+- Requires Windows 7/10/11 with PowerShell 2.0+ and .NET Framework 3.5+. Works with the built-in PowerShell on each system.
+- UI language follows the system UI language (Chinese or English); override with `-Lang zh` / `-Lang en`.
+- Other users' recycle bins require administrator rights (`-AllUsers` or run the .bat as administrator).
+
+```powershell
+.\trash-path-cleaner.ps1 -TargetPath 'D:\proj;E:\tmp' -MaxSizeKB 100 -Lang en
+```
+
+Deletion is permanent and cannot be undone. Licensed under the MIT License.
